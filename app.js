@@ -71,6 +71,8 @@ const I = {
   plus: '<path d="M12 5v14M5 12h14"/>',
   copy: '<rect x="9" y="9" width="11" height="11" rx="2"/><path d="M5 15V5a2 2 0 0 1 2-2h10"/>',
   back: '<path d="M15 18l-6-6 6-6"/>',
+  scan: '<path d="M3 7V5a2 2 0 0 1 2-2h2M17 3h2a2 2 0 0 1 2 2v2M21 17v2a2 2 0 0 1-2 2h-2M7 21H5a2 2 0 0 1-2-2v-2"/><path d="M7 8v8M10 8v8M13 8v8M17 8v8"/>',
+  flash: '<path d="M13 2L4 14h7l-1 8 9-12h-7z"/>',
   more: '<circle cx="5" cy="12" r="1.6"/><circle cx="12" cy="12" r="1.6"/><circle cx="19" cy="12" r="1.6"/>',
   ret: '<path d="M9 14L4 9l5-5"/><path d="M4 9h11a5 5 0 0 1 0 10h-3"/>',
   logout: '<path d="M15 4h4a1 1 0 0 1 1 1v14a1 1 0 0 1-1 1h-4"/><path d="M10 17l5-5-5-5M15 12H3"/>',
@@ -491,6 +493,7 @@ VIEWS.catalogo = {
     return `<div class="page-head"><div><h1>Catálogo</h1><p class="sub">${S.obras.length} títulos · ${kpis().exemplares} exemplares. Cada exemplar físico tem seu próprio código de etiqueta.</p></div>
       <button class="btn primary" data-act="go" data-v="obraForm">${ic('plus')} Nova obra</button></div>
       <div class="toolbar"><label class="search"><span class="sr">Buscar</span>${ic('search')}<input id="cat-q" data-in="catQ" value="${esc(P.q || '')}" placeholder="Título, autor, ISBN ou código da etiqueta" autocomplete="off"></label>
+      ${podeEscanear() ? `<button type="button" class="btn" data-act="scanCat">${ic('scan')} Ler ISBN</button>` : ''}
       <div class="field" style="flex:0 1 220px"><label class="sr" for="cat-cat">Gênero</label><select id="cat-cat" data-ch="catCat"><option value="">Todos os gêneros</option>${cats.map(c => `<option value="${esc(c)}" ${P.cat === c ? 'selected' : ''}>${esc(generoNome(c))} (${esc(c)})</option>`).join('')}</select></div></div>
       <div id="cat-res">${catalogResults()}</div>`;
   }
@@ -546,7 +549,8 @@ VIEWS.obraForm = {
         <fieldset><legend>Identificação</legend>
           <div class="fields">
             <div class="field" id="fw-isbn"><label for="f-isbn">ISBN</label>
-              <div class="inline"><input id="f-isbn" value="${v('isbn')}" inputmode="numeric" placeholder="978-85-..." ${o && o.semIsbn ? 'disabled' : ''}><button type="button" class="btn" data-act="gbIsbn" ${o && o.semIsbn ? 'disabled' : ''}>${ic('search')} Buscar</button></div>
+              <div class="inline"><input id="f-isbn" value="${o ? v('isbn') : esc(P.isbn || '')}" inputmode="numeric" placeholder="978-85-..." ${o && o.semIsbn ? 'disabled' : ''}><button type="button" class="btn" data-act="gbIsbn" ${o && o.semIsbn ? 'disabled' : ''}>${ic('search')} Buscar</button></div>
+              ${podeEscanear() ? `<button type="button" class="btn scan-cta" data-act="scanIsbnForm" ${o && o.semIsbn ? 'disabled' : ''}>${ic('scan')} Ler código de barras</button>` : ''}
               <span class="hint">Preenche título, autor, editora e ano pelo Google Books.</span><span class="msg" id="m-isbn"></span></div>
             <div class="field" style="align-content:center"><label class="check"><input type="checkbox" id="f-semisbn" data-ch="semIsbn" ${o && o.semIsbn ? 'checked' : ''}> Livro sem ISBN</label>
               <span class="hint">Apostilas, materiais da casa e livros antigos.</span></div>
@@ -576,7 +580,7 @@ VIEWS.obraForm = {
         <div class="form-actions"><button type="button" class="btn" data-act="go" data-v="${ed ? 'obra' : 'catalogo'}" ${ed ? `data-id="${o.id}"` : ''}>Cancelar</button><button class="btn primary">${ed ? 'Salvar alterações' : 'Salvar e gerar códigos'}</button></div>
       </form>`;
   },
-  after() { UI.gb = []; }
+  after() { UI.gb = []; if (!P.id && P.isbn && $('#f-isbn')) ACT.gbIsbn(); }
 };
 function codPreview(sig, qtd) {
   sig = sig ?? ($('#f-genero') ? $('#f-genero').value : '');
@@ -1046,7 +1050,7 @@ VIEWS.atividades = {
 
 /* ============ Modal, toast, impressão e arquivos ============ */
 function openModal(html) { $('#modal-root').innerHTML = `<div class="overlay" data-act="overlay"><div class="modal" role="dialog" aria-modal="true">${html}</div></div>`; setTimeout(() => $('#modal-root .modal [autofocus], #modal-root .modal input, #modal-root .modal button')?.focus(), 30); }
-function closeModal() { const m = $('#modal-root'); if (m) m.innerHTML = ''; }
+function closeModal() { pararCamera(); const m = $('#modal-root'); if (m) m.innerHTML = ''; }
 function toast(msg, kind = 'ok') { const d = document.createElement('div'); d.className = 'toast ' + kind; d.textContent = msg; $('#toasts').appendChild(d); setTimeout(() => d.remove(), kind === 'bad' ? 7000 : 4000); }
 function copyText(t) {
   try { navigator.clipboard.writeText(t).then(() => toast(`Copiado: ${t}`), () => toast(`Não deu para copiar automaticamente. Selecione: ${t}`, 'bad')); }
@@ -1096,6 +1100,115 @@ function loanSummaryFacts(l) {
   const u = user(l.userId), ex = exem(l.exId), o = obra(ex.obraId), st = loanSt(l);
   return `<dl class="facts"><div><dt>Usuário</dt><dd>${esc(u.nome)}</dd></div><div><dt>Livro</dt><dd>${esc(o.titulo)}</dd></div><div><dt>Código</dt><dd class="mono">${ex.codigo}</dd></div>
     <div><dt>Retirada</dt><dd>${fmtD(l.dataEmp)}</dd></div><div><dt>Vencimento</dt><dd>${fmtD(l.dataPrev)}</dd></div><div><dt>Situação</dt><dd>${pill(st.label, st.cls)} <span class="small muted">${st.note}</span></dd></div></dl>`;
+}
+
+/* ============ Leitor de código de barras (ISBN) ============ */
+// Usa o leitor nativo do navegador (Chrome no Android). Onde não existe (iPhone, computador), carrega um leitor alternativo.
+const BD_URL = 'https://cdn.jsdelivr.net/npm/barcode-detector@3.2.2/dist/es/ponyfill.js';
+const SCAN = { stream: null, timer: 0, det: null, onRead: null, torch: false, aviso: 0 };
+function podeEscanear() { return !!(window.isSecureContext && navigator.mediaDevices && navigator.mediaDevices.getUserMedia); }
+function isbn13Valido(c) {
+  if (!/^97[89]\d{10}$/.test(c)) return false;
+  let s = 0; for (let i = 0; i < 12; i++) s += +c[i] * (i % 2 ? 3 : 1);
+  return (10 - s % 10) % 10 === +c[12];
+}
+// Normaliza ISBN-10 ou ISBN-13 para ISBN-13 (só para comparar)
+function isbnComoIsbn13(v) {
+  const t = String(v || '').toUpperCase().replace(/[^0-9X]/g, '');
+  if (t.length === 13) return t;
+  if (t.length !== 10) return '';
+  const b = '978' + t.slice(0, 9); let s = 0; for (let i = 0; i < 12; i++) s += +b[i] * (i % 2 ? 3 : 1);
+  return b + ((10 - s % 10) % 10);
+}
+function obraPorIsbn(isbn) { const k = isbnComoIsbn13(isbn); return k ? S.obras.find(o => o.isbn && isbnComoIsbn13(o.isbn) === k) : null; }
+async function detectorISBN() {
+  if (SCAN.det) return SCAN.det;
+  if ('BarcodeDetector' in window) {
+    try { const f = await window.BarcodeDetector.getSupportedFormats(); if (f.includes('ean_13')) return (SCAN.det = new window.BarcodeDetector({ formats: ['ean_13'] })); } catch (e) { }
+  }
+  const m = await import(BD_URL);
+  return (SCAN.det = new m.BarcodeDetector({ formats: ['ean_13'] }));
+}
+function scanStatus(txt, erro) { const st = $('#scan-st'); if (st) { st.textContent = txt; st.classList.toggle('err', !!erro); } }
+function abrirLeitor(onRead) {
+  if (!podeEscanear()) { toast('Este navegador não permite usar a câmera. Digite o ISBN.', 'bad'); return; }
+  pararCamera(); SCAN.onRead = onRead; SCAN.aviso = 0;
+  openModal(`<h2>Ler código de barras</h2>
+    <p class="small muted">Aponte a câmera para o código de barras do ISBN, normalmente na contracapa. Ele começa com 978 ou 979.</p>
+    <div class="scan-box"><video id="scan-video" playsinline muted autoplay></video><div class="scan-frame"><span class="scan-line"></span></div><div class="scan-status" id="scan-st" role="status">Abrindo a câmera…</div></div>
+    <div class="scan-tools"><button type="button" class="btn sm" data-act="scanTorch" id="scan-torch" aria-pressed="false" hidden>${ic('flash')} Lanterna</button></div>
+    <form class="inline" data-form="scanManual" novalidate><label class="sr" for="scan-man">Digitar o ISBN</label><input id="scan-man" inputmode="numeric" placeholder="Ou digite o ISBN" autocomplete="off"><button class="btn">Usar</button></form>
+    <div class="modal-actions"><button type="button" class="btn" data-act="close">Cancelar</button></div>`);
+  setTimeout(() => { if (document.activeElement && document.activeElement.id === 'scan-man') document.activeElement.blur(); }, 60);
+  iniciarCamera();
+}
+async function iniciarCamera() {
+  let stream;
+  try {
+    stream = await navigator.mediaDevices.getUserMedia({ audio: false, video: { facingMode: { ideal: 'environment' }, width: { ideal: 1280 }, height: { ideal: 720 } } });
+  } catch (e) {
+    const n = e && e.name;
+    scanStatus(n === 'NotAllowedError' ? 'A câmera está bloqueada para este site. No Chrome, toque no ícone ao lado do endereço → Permissões → Câmera → Permitir. Depois tente de novo.'
+      : n === 'NotFoundError' || n === 'OverconstrainedError' ? 'Nenhuma câmera encontrada neste aparelho. Digite o ISBN abaixo.'
+        : n === 'NotReadableError' ? 'A câmera está sendo usada por outro aplicativo. Feche-o e tente de novo.'
+          : 'Não foi possível abrir a câmera. Digite o ISBN abaixo.', true);
+    return;
+  }
+  const v = $('#scan-video');
+  if (!v) { stream.getTracks().forEach(t => t.stop()); return; } // a janela foi fechada enquanto a câmera abria
+  SCAN.stream = stream; v.srcObject = stream;
+  try { await v.play(); } catch (e) { }
+  const track = stream.getVideoTracks()[0], cap = track && track.getCapabilities ? track.getCapabilities() : {};
+  if (cap.focusMode && cap.focusMode.includes('continuous')) track.applyConstraints({ advanced: [{ focusMode: 'continuous' }] }).catch(() => { });
+  if (cap.torch && $('#scan-torch')) $('#scan-torch').hidden = false;
+  let det;
+  try { if (!SCAN.det) scanStatus('Carregando o leitor…'); det = await detectorISBN(); }
+  catch (e) { scanStatus('Não foi possível carregar o leitor de código de barras. Confira a internet ou digite o ISBN abaixo.', true); return; }
+  if (SCAN.stream !== stream) return;
+  scanStatus('Procurando o código…');
+  lerQuadro(det, stream);
+}
+function lerQuadro(det, stream) {
+  const v = $('#scan-video');
+  if (SCAN.stream !== stream || !v) return;
+  const prox = () => { if (SCAN.stream === stream) SCAN.timer = setTimeout(() => lerQuadro(det, stream), 120); };
+  if (v.readyState < 2 || !v.videoWidth) { prox(); return; }
+  det.detect(v).then(cods => {
+    if (SCAN.stream !== stream) return;
+    for (const c of cods) {
+      const val = digits(c.rawValue);
+      if (isbn13Valido(val)) { leituraOk(val); return; }
+      if (val.length >= 8 && Date.now() - SCAN.aviso > 2500) { SCAN.aviso = Date.now(); scanStatus(`O código ${val} não é um ISBN. Procure o código que começa com 978 ou 979.`); }
+    }
+    prox();
+  }, prox);
+}
+function bip() {
+  try {
+    const A = window.AudioContext || window.webkitAudioContext; if (!A) return;
+    const ctx = new A(), o = ctx.createOscillator(), g = ctx.createGain();
+    o.frequency.value = 1200; g.gain.value = 0.08; o.connect(g); g.connect(ctx.destination);
+    o.start(); o.stop(ctx.currentTime + 0.09); o.onended = () => ctx.close();
+  } catch (e) { }
+}
+function leituraOk(isbn) {
+  const cb = SCAN.onRead;
+  try { if (navigator.vibrate) navigator.vibrate(60); } catch (e) { }
+  bip(); closeModal();
+  if (cb) cb(isbn);
+}
+function pararCamera() {
+  clearTimeout(SCAN.timer); SCAN.timer = 0;
+  if (SCAN.stream) SCAN.stream.getTracks().forEach(t => t.stop());
+  SCAN.stream = null; SCAN.torch = false;
+}
+// Livro já cadastrado: oferece abrir a obra para adicionar exemplar
+function avisoIsbnCadastrado(o) {
+  const s = exSummary(o.id);
+  openModal(`<h2>Este ISBN já está cadastrado</h2>
+    <div class="result"><span class="big">${esc(o.titulo)}</span><span class="small">${esc(o.autor)} · ${esc(o.editora)} · ${o.ano || 's/ano'} · ISBN ${esc(o.isbn)}</span><span class="small muted">${plural(s.total, 'exemplar', 'exemplares')} · ${s.txt}</span></div>
+    <p>Se for mais uma cópia deste livro, abra a obra e use <b>Adicionar exemplar</b>.</p>
+    <div class="modal-actions"><button class="btn" data-act="close">Fechar</button><button class="btn primary" data-act="scanAbrirObra" data-id="${o.id}">Abrir a obra</button></div>`);
 }
 
 /* ============ Ações ============ */
@@ -1152,6 +1265,29 @@ const ACT = {
     } catch (e) { box.innerHTML = '<span class="small muted">Não foi possível consultar o Google Books agora.</span>'; }
   },
   gbPick(t) { fillFromGB(UI.gb[+t.dataset.i]); $('#gb-res').innerHTML = ''; },
+  scanCat() {
+    abrirLeitor(isbn => {
+      const o = obraPorIsbn(isbn);
+      if (o) { go('obra', { id: o.id }); toast(`ISBN ${isbn} já cadastrado: ${o.titulo}`); }
+      else { go('obraForm', { isbn }); toast(`ISBN ${isbn} lido. Ele ainda não está no catálogo.`); }
+    });
+  },
+  scanIsbnForm() {
+    const editId = P.id || '';
+    abrirLeitor(isbn => {
+      const i = $('#f-isbn'); if (!i) return;
+      i.value = isbn; fieldErr('isbn', '');
+      const o = obraPorIsbn(isbn);
+      if (o && o.id !== editId) { avisoIsbnCadastrado(o); return; }
+      ACT.gbIsbn();
+    });
+  },
+  scanAbrirObra(t) { closeModal(); go('obra', { id: t.dataset.id }); },
+  scanTorch(t) {
+    const tr = SCAN.stream && SCAN.stream.getVideoTracks()[0]; if (!tr) return;
+    const on = !SCAN.torch;
+    tr.applyConstraints({ advanced: [{ torch: on }] }).then(() => { SCAN.torch = on; t.setAttribute('aria-pressed', String(on)); t.classList.toggle('primary', on); }, () => toast('Não foi possível ligar a lanterna.', 'bad'));
+  },
   dupAdd(t) {
     const p = UI.pendingObra;
     run(async () => { const r = await api('exemplar.adicionar', { obraId: t.dataset.id, qtd: p.qtd, local: p.local }); closeModal(); go('obraSalva', { id: r.obraId, ids: r.exIds.join(','), added: '1' }); });
@@ -1374,7 +1510,7 @@ async function gbFetch(q) {
 function fillFromGB(r) {
   const set = (id, v) => { const el = $(id); if (el && v) el.value = v; };
   set('#f-isbn', r.isbn); set('#f-titulo', r.titulo); set('#f-autor', r.autor); set('#f-editora', r.editora); set('#f-ano', r.ano); set('#f-idioma', r.idioma);
-  const cb = $('#f-semisbn'); if (cb && r.isbn) { cb.checked = false; $('#f-isbn').disabled = false; }
+  const cb = $('#f-semisbn'); if (cb && r.isbn) { cb.checked = false; CHG.semIsbn(cb); }
   $('#gb-note').innerHTML = '<div class="note info"><b>Dados sugeridos pelo Google Books</b><span>Revise antes de salvar e escolha o gênero, que define a sigla da etiqueta.</span></div>';
 }
 function salvarObra(p) {
@@ -1400,6 +1536,12 @@ function salvarObra(p) {
 /* ============ Formulários ============ */
 function fieldErr(id, msg) { const m = $('#m-' + id); if (m) m.textContent = msg || ''; const f = m && m.closest('.field'); if (f) f.classList.toggle('err', !!msg); return !msg; }
 const FORM = {
+  scanManual(f) {
+    const raw = $('#scan-man').value.trim().toUpperCase(), d = raw.replace(/[^0-9X]/g, '');
+    if (!(d.length === 13 && /^\d+$/.test(d)) && !/^\d{9}[\dX]$/.test(d)) { toast('O ISBN deve ter 10 ou 13 dígitos.', 'bad'); return; }
+    if (d.length === 13 && !isbn13Valido(d)) { toast('Esse ISBN de 13 dígitos não é válido. Confira os números.', 'bad'); return; }
+    const cb = SCAN.onRead; closeModal(); if (cb) cb(d);
+  },
   obra() {
     const ed = !!P.id; const val = id => ($('#f-' + id)?.value || '').trim();
     const semIsbn = $('#f-semisbn').checked, isbnRaw = semIsbn ? '' : val('isbn'), isbnD = digits(isbnRaw.replace(/x$/i, '')) + (/x$/i.test(isbnRaw) ? 'X' : '');
@@ -1473,7 +1615,7 @@ const INP = {
 const CHG = {
   catCat(el) { P.cat = el.value; $('#cat-res').innerHTML = catalogResults(); },
   obraGen(el) { const pv = $('#cod-preview'); if (pv) pv.innerHTML = codPreview(); fieldErr('genero', ''); },
-  semIsbn(el) { const i = $('#f-isbn'); i.disabled = el.checked; i.nextElementSibling.disabled = el.checked; if (el.checked) { i.value = ''; fieldErr('isbn', ''); } },
+  semIsbn(el) { const i = $('#f-isbn'); i.disabled = el.checked; i.nextElementSibling.disabled = el.checked; const sc = $('[data-act="scanIsbnForm"]'); if (sc) sc.disabled = el.checked; if (el.checked) { i.value = ''; fieldErr('isbn', ''); } },
   loanEmp(el) { UI.draft.dataEmp = el.value; UI.draft.dataPrev = el.value ? addDays(el.value, S.config.prazo) : ''; render(); },
   loanPrev(el) { UI.draft.dataPrev = el.value; render(); },
   devCond() { const v = (document.querySelector('input[name="m-cond"]:checked') || {}).value; $('#m-avaria').hidden = v !== 'avaria'; },
@@ -1511,6 +1653,7 @@ document.addEventListener('click', e => { const t = e.target.closest('[data-act]
 document.addEventListener('input', e => { const n = e.target.dataset && e.target.dataset.in; if (n && INP[n]) INP[n](e.target); });
 document.addEventListener('change', e => { const n = e.target.dataset && e.target.dataset.ch; if (n && CHG[n]) CHG[n](e.target); });
 document.addEventListener('submit', e => { e.preventDefault(); const n = e.target.dataset.form; if (FORM[n]) FORM[n](e.target); });
+document.addEventListener('visibilitychange', () => { if (document.hidden && SCAN.stream) closeModal(); });
 document.addEventListener('keydown', e => { if (e.key === 'Escape') { if ($('#modal-root').innerHTML) closeModal(); else if (UI.menu) { UI.menu = false; render(); } } });
 // Ao voltar para o app depois de um tempo, recarrega os dados (outros operadores podem ter feito alterações)
 document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible' && S && Date.now() - UI.lastSync > 5 * 60 * 1000 && !$('#modal-root').innerHTML) boot(true); });
