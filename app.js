@@ -551,11 +551,11 @@ VIEWS.obraForm = {
             <div class="field" id="fw-isbn"><label for="f-isbn">ISBN</label>
               <div class="inline"><input id="f-isbn" value="${o ? v('isbn') : esc(P.isbn || '')}" inputmode="numeric" placeholder="978-85-..." ${o && o.semIsbn ? 'disabled' : ''}><button type="button" class="btn" data-act="gbIsbn" ${o && o.semIsbn ? 'disabled' : ''}>${ic('search')} Buscar</button></div>
               ${podeEscanear() ? `<button type="button" class="btn scan-cta" data-act="scanIsbnForm" ${o && o.semIsbn ? 'disabled' : ''}>${ic('scan')} Ler código de barras</button>` : ''}
-              <span class="hint">Preenche título, autor, editora e ano pelo Google Books.</span><span class="msg" id="m-isbn"></span></div>
+              <span class="hint">Preenche título, autor, editora e ano automaticamente.</span><span class="msg" id="m-isbn"></span></div>
             <div class="field" style="align-content:center"><label class="check"><input type="checkbox" id="f-semisbn" data-ch="semIsbn" ${o && o.semIsbn ? 'checked' : ''}> Livro sem ISBN</label>
               <span class="hint">Apostilas, materiais da casa e livros antigos.</span></div>
           </div>
-          <details ${UI.gb.length ? 'open' : ''}><summary class="small" style="cursor:pointer;font-weight:600;color:var(--brand)">Buscar por título e autor no Google Books</summary>
+          <details ${UI.gb.length ? 'open' : ''}><summary class="small" style="cursor:pointer;font-weight:600;color:var(--brand)">Buscar por título e autor na internet</summary>
             <div class="inline" style="margin-top:8px"><input id="f-gbq" class="" placeholder="Ex.: Conceição Evaristo" style="padding:9px 11px;border:1px solid var(--line);border-radius:8px;background:var(--surface);min-height:42px"><button type="button" class="btn" data-act="gbSearch">Buscar</button></div>
             <div id="gb-res" style="display:grid;gap:6px;margin-top:8px"></div></details>
           <div id="gb-note"></div>
@@ -1249,20 +1249,25 @@ const ACT = {
     run(async () => { await api('exemplar.status', { exId: t.dataset.id, to, obs: $('#m-exobs') ? $('#m-exobs').value.trim() : '' }); closeModal(); render(); toast(`Exemplar ${to.toLowerCase()}`); });
   },
   async gbIsbn() {
-    const isbn = digits($('#f-isbn').value); const m = $('#m-isbn');
-    if (isbn.length !== 10 && isbn.length !== 13) { m.textContent = 'ISBN deve ter 10 ou 13 dígitos.'; return; }
-    m.textContent = ''; $('#gb-note').innerHTML = '<p class="small muted">Buscando no Google Books…</p>';
-    try { const r = await gbFetch('isbn:' + isbn); if (!r.length) { $('#gb-note').innerHTML = '<div class="note warn"><b>Nada encontrado no Google Books para este ISBN</b><span>Preencha os dados manualmente.</span></div>'; return; } fillFromGB(r[0]); }
-    catch (e) { $('#gb-note').innerHTML = '<div class="note warn"><b>Não foi possível consultar o Google Books agora</b><span>Preencha os dados manualmente.</span></div>'; }
+    const isbn = $('#f-isbn').value.toUpperCase().replace(/[^0-9X]/g, ''); const m = $('#m-isbn');
+    if (!/^\d{13}$/.test(isbn) && !/^\d{9}[\dX]$/.test(isbn)) { m.textContent = 'ISBN deve ter 10 ou 13 dígitos.'; return; }
+    m.textContent = ''; $('#gb-note').innerHTML = '<p class="small muted">Buscando os dados do livro…</p>';
+    const { res, falhas, total } = await buscarIsbn(isbn);
+    if (!$('#gb-note')) return;
+    if (res) fillFromGB(res);
+    else if (falhas === total) $('#gb-note').innerHTML = '<div class="note warn"><b>Não foi possível consultar as bases de livros agora</b><span>Confira a internet e tente de novo, ou preencha os dados manualmente.</span></div>';
+    else $('#gb-note').innerHTML = '<div class="note warn"><b>Nenhuma base de livros encontrou este ISBN</b><span>Confira os números ou preencha os dados manualmente.</span></div>';
   },
   async gbSearch() {
     const q = $('#f-gbq').value.trim(); const box = $('#gb-res');
     if (q.length < 3) { box.innerHTML = '<span class="small muted">Digite ao menos 3 letras.</span>'; return; }
     box.innerHTML = '<span class="small muted">Buscando…</span>';
-    try {
-      UI.gb = await gbFetch(q);
-      box.innerHTML = UI.gb.length ? UI.gb.map((b, i) => `<button type="button" class="account" data-act="gbPick" data-i="${i}"><span class="who"><b>${esc(b.titulo)}</b><span>${esc(b.autor || 'Autor não informado')} · ${esc(b.editora || 'Editora não informada')} · ${esc(b.ano || 's/ano')}${b.isbn ? ` · ISBN ${esc(b.isbn)}` : ''}</span></span></button>`).join('') : '<span class="small muted">Nenhum resultado. Preencha os dados manualmente.</span>';
-    } catch (e) { box.innerHTML = '<span class="small muted">Não foi possível consultar o Google Books agora.</span>'; }
+    let lista = null;
+    try { lista = await gbFetch(q); } catch (e) { }
+    if (!lista || !lista.length) { try { const ol = await openLibBusca(q); if (ol.length || !lista) lista = ol; } catch (e) { } }
+    if (!lista) { box.innerHTML = '<span class="small muted">Não foi possível consultar as bases de livros agora.</span>'; return; }
+    UI.gb = lista;
+    box.innerHTML = UI.gb.length ? UI.gb.map((b, i) => `<button type="button" class="account" data-act="gbPick" data-i="${i}"><span class="who"><b>${esc(b.titulo)}</b><span>${esc(b.autor || 'Autor não informado')}${b.editora ? ' · ' + esc(b.editora) : ''}${b.ano ? ' · ' + esc(b.ano) : b.anoOriginal ? ' · 1ª publicação ' + esc(b.anoOriginal) : ''}${b.isbn ? ` · ISBN ${esc(b.isbn)}` : ''}</span></span></button>`).join('') : '<span class="small muted">Nenhum resultado. Preencha os dados manualmente.</span>';
   },
   gbPick(t) { fillFromGB(UI.gb[+t.dataset.i]); $('#gb-res').innerHTML = ''; },
   scanCat() {
@@ -1496,22 +1501,77 @@ const ACT = {
   opStatus(t) { const o = S.operadores[+t.dataset.i]; run(async () => { await api('operador.atualizar', { email: o.email, status: o.status === 'Ativo' ? 'Inativo' : 'Ativo' }); render(); }); },
 };
 
+/* ============ Dados do livro pela internet ============ */
+// Ordem: BrasilAPI (catálogo da CBL e outras bases, bom para livros brasileiros) → Google Books → Open Library.
+// Uma fonte completa os campos que a anterior deixou em branco.
+const IDIOMAS = { pt: 'Português', 'pt-BR': 'Português', 'pt-PT': 'Português', por: 'Português', en: 'Inglês', eng: 'Inglês', es: 'Espanhol', spa: 'Espanhol', fr: 'Francês', fre: 'Francês', fra: 'Francês', it: 'Italiano', ita: 'Italiano', de: 'Alemão', ger: 'Alemão', deu: 'Alemão' };
+const PEQUENAS = new Set(['a', 'o', 'as', 'os', 'e', 'de', 'da', 'do', 'das', 'dos', 'em', 'no', 'na', 'nos', 'nas', 'um', 'uma', 'para', 'por', 'com', 'à', 'ao', 'aos', 'às', 'ou']);
+// "O PEQUENO PRÍNCIPE" → "O Pequeno Príncipe" (só mexe em textos todos em maiúsculas)
+function tituloBonito(s) {
+  s = String(s || '').trim();
+  if (!s || s !== s.toUpperCase() || !/\p{Lu}/u.test(s)) return s;
+  let inicio = true; // primeira palavra e a que vem depois de ":" ou " - " sempre maiúscula
+  return s.toLowerCase().split(/(\s+)/).map(w => {
+    if (/^\s*$/.test(w)) return w;
+    const out = !inicio && PEQUENAS.has(w) ? w : w.replace(/(^|[-'’(])(\p{L})/gu, (_, a, b) => a + b.toUpperCase());
+    inicio = /^[-–—]$/.test(w) || /[:.?!]$/.test(w);
+    return out;
+  }).join('');
+}
 async function gbFetch(q) {
-  const r = await fetch('https://www.googleapis.com/books/v1/volumes?maxResults=8&q=' + encodeURIComponent(q));
+  const key = CFG.GOOGLE_BOOKS_KEY ? '&key=' + encodeURIComponent(CFG.GOOGLE_BOOKS_KEY) : '';
+  const r = await fetch('https://www.googleapis.com/books/v1/volumes?maxResults=8&q=' + encodeURIComponent(q) + key);
   if (!r.ok) throw new Error('Google Books indisponível');
   const j = await r.json();
-  const LANG = { pt: 'Português', 'pt-BR': 'Português', 'pt-PT': 'Português', en: 'Inglês', es: 'Espanhol', fr: 'Francês', it: 'Italiano', de: 'Alemão' };
   return (j.items || []).map(it => {
     const v = it.volumeInfo || {}, ids = v.industryIdentifiers || [];
     const isbn = (ids.find(i => i.type === 'ISBN_13') || ids.find(i => i.type === 'ISBN_10') || {}).identifier || '';
-    return { isbn, titulo: [v.title, v.subtitle].filter(Boolean).join(': '), autor: (v.authors || []).join(', '), editora: v.publisher || '', ano: (v.publishedDate || '').slice(0, 4), idioma: LANG[v.language] || v.language || '' };
+    return { isbn, titulo: [v.title, v.subtitle].filter(Boolean).join(': '), autor: (v.authors || []).join(', '), editora: v.publisher || '', ano: (v.publishedDate || '').slice(0, 4), idioma: IDIOMAS[v.language] || v.language || '', fonte: 'Google Books' };
   });
+}
+async function brasilApiIsbn(isbn) {
+  const r = await fetch('https://brasilapi.com.br/api/isbn/v1/' + isbn);
+  if (r.status === 404 || r.status === 400) return null;
+  if (!r.ok) throw new Error('BrasilAPI indisponível');
+  const v = await r.json();
+  return { isbn, titulo: tituloBonito([v.title, v.subtitle].filter(Boolean).join(': ')), autor: (v.authors || []).filter(Boolean).join(', '), editora: tituloBonito(v.publisher), ano: v.year ? String(v.year) : '', idioma: '', fonte: 'BrasilAPI' };
+}
+async function googleIsbn(isbn) { const l = await gbFetch('isbn:' + isbn); return l[0] ? { ...l[0], isbn } : null; }
+async function openLibIsbn(isbn) {
+  const r = await fetch('https://openlibrary.org/api/books?bibkeys=ISBN:' + isbn + '&format=json&jscmd=data');
+  if (!r.ok) throw new Error('Open Library indisponível');
+  const v = (await r.json())['ISBN:' + isbn]; if (!v) return null;
+  return { isbn, titulo: [v.title, v.subtitle].filter(Boolean).join(': '), autor: (v.authors || []).map(a => a.name).join(', '), editora: ((v.publishers || [])[0] || {}).name || '', ano: ((v.publish_date || '').match(/\d{4}/) || [''])[0], idioma: '', fonte: 'Open Library' };
+}
+async function buscarIsbn(isbn) {
+  const fontes = [brasilApiIsbn, googleIsbn, openLibIsbn];
+  let res = null, falhas = 0;
+  for (const f of fontes) {
+    try {
+      const r = await f(isbn);
+      if (r && r.titulo) {
+        if (!res) res = { ...r, fontes: [r.fonte] };
+        else { let usou = false; for (const k of ['autor', 'editora', 'ano', 'idioma']) if (!res[k] && r[k]) { res[k] = r[k]; usou = true; } if (usou) res.fontes.push(r.fonte); }
+      }
+    } catch (e) { falhas++; }
+    if (res && res.autor && res.editora && res.ano) break;
+  }
+  // ISBN brasileiro (978-85 / 978-65): sugere Português quando nenhuma fonte informou o idioma
+  if (res && !res.idioma && /^97(885|865)/.test(isbnComoIsbn13(isbn))) res.idioma = 'Português';
+  return { res, falhas, total: fontes.length };
+}
+// Busca por título/autor no Open Library (quando o Google Books não responde). Dados da obra, não da edição: sem ISBN, editora e ano.
+async function openLibBusca(q) {
+  const r = await fetch('https://openlibrary.org/search.json?limit=8&fields=title,subtitle,author_name,first_publish_year,language&q=' + encodeURIComponent(q));
+  if (!r.ok) throw new Error('Open Library indisponível');
+  return ((await r.json()).docs || []).map(d => ({ isbn: '', titulo: [d.title, d.subtitle].filter(Boolean).join(': '), autor: (d.author_name || []).join(', '), editora: '', ano: '', anoOriginal: d.first_publish_year ? String(d.first_publish_year) : '', idioma: (d.language || []).length === 1 ? (IDIOMAS[d.language[0]] || '') : '', fonte: 'Open Library' }));
 }
 function fillFromGB(r) {
   const set = (id, v) => { const el = $(id); if (el && v) el.value = v; };
   set('#f-isbn', r.isbn); set('#f-titulo', r.titulo); set('#f-autor', r.autor); set('#f-editora', r.editora); set('#f-ano', r.ano); set('#f-idioma', r.idioma);
   const cb = $('#f-semisbn'); if (cb && r.isbn) { cb.checked = false; CHG.semIsbn(cb); }
-  $('#gb-note').innerHTML = '<div class="note info"><b>Dados sugeridos pelo Google Books</b><span>Revise antes de salvar e escolha o gênero, que define a sigla da etiqueta.</span></div>';
+  const fontes = (r.fontes || [r.fonte || 'Google Books']).join(' + ');
+  $('#gb-note').innerHTML = `<div class="note info"><b>Dados sugeridos por ${esc(fontes)}</b><span>Revise antes de salvar${r.fonte === 'Open Library' && !r.isbn ? ' (editora, ano e ISBN variam conforme a edição)' : ''} e escolha o gênero, que define a sigla da etiqueta.</span></div>`;
 }
 function salvarObra(p) {
   run(async () => {
