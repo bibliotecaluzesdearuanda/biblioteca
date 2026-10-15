@@ -202,7 +202,12 @@ const exByNum = n => S.exemplares.find(e => e.num === n);
 const genero = s => (S.generos || []).find(g => g.sigla === s);
 const generoNome = s => (genero(s) || { nome: s }).nome;
 const user = id => S.usuarios.find(u => u.id === id);
-const userByCPF = c => S.usuarios.find(u => u.cpf === digits(c));
+// CPF próprio (um menor associado pode usar o CPF do responsável: cpfResp)
+const userByCPF = c => S.usuarios.find(u => u.cpf === digits(c) && !u.cpfResp);
+const usersByCPF = c => S.usuarios.filter(u => u.cpf === digits(c));
+const fmtMat = n => String(n || 0).padStart(4, '0');
+const MARCA_SECRETARIA = 'Desligado(a) ou falecido(a) na Secretaria.';
+const assocInfo = u => u.assocId ? `Associado(a) · matrícula ${fmtMat(u.matricula)}` : '';
 const activeLoans = () => S.emprestimos.filter(l => !l.dataDev);
 const activeOf = uid => activeLoans().filter(l => l.userId === uid);
 const loanOfEx = h => activeLoans().find(l => l.exId === h);
@@ -257,6 +262,7 @@ function userBlocks(u) {
   const r = []; const cfg = S.config;
   if (!u) return ['CPF não encontrado no cadastro de usuários autorizados'];
   if (u.status !== 'Ativo') r.push(`Cadastro ${u.status.toLowerCase()}${u.obs ? ` (${u.obs})` : ''}`);
+  if (u.bloqueioAssoc) r.push(u.bloqueioAssoc.replace(/\.$/, '') + '. Regularize na Secretaria');
   const act = activeOf(u.id);
   if (act.length >= cfg.maxExemplares) r.push(`Já está com ${act.length} de ${cfg.maxExemplares} exemplares permitidos`);
   if (cfg.bloqueiaAtraso && act.some(l => loanSt(l).code === 'atrasado')) r.push('Tem empréstimo em atraso. Precisa devolver antes de retirar outro livro');
@@ -281,6 +287,7 @@ function renewBlocks(l) {
   if (l.renovacoes >= S.config.renovacoes) r.push(`Limite de ${plural(S.config.renovacoes, 'renovação', 'renovações')} atingido`);
   if (!l.dataDev && loanSt(l).code === 'atrasado') r.push('Empréstimo em atraso não pode ser renovado. Registre a devolução');
   if (u.status !== 'Ativo') r.push(`Usuário ${u.status.toLowerCase()}`);
+  if (u.bloqueioAssoc) r.push(u.bloqueioAssoc.replace(/\.$/, ''));
   if (ocsPendUser(u.id).length) r.push('O usuário tem ocorrência pendente');
   if (protRenov(l)) r.push('Já existe um protocolo de renovação aguardando assinatura');
   return r;
@@ -604,19 +611,19 @@ VIEWS.obraSalva = {
 /* ---- Usuários ---- */
 function userResults() {
   const q = P.q || '', nq = norm(q), dq = digits(q), stf = P.st || 'Todos';
-  const list = S.usuarios.filter(u => (stf === 'Todos' || u.status === stf) && (!q || norm(u.nome + ' ' + u.email).includes(nq) || (dq.length >= 3 && u.cpf.includes(dq))))
+  const list = S.usuarios.filter(u => (stf === 'Todos' || u.status === stf) && (!q || norm(u.nome + ' ' + u.email).includes(nq) || (dq.length >= 3 && u.cpf.includes(dq)) || (u.assocId && dq && dq.length <= 6 && +dq === u.matricula)))
     .sort((a, b) => a.nome.localeCompare(b.nome, 'pt-BR'));
   if (!list.length) return `<div class="table-wrap"><div class="empty">Nenhum usuário encontrado. ${dq.length === 11 ? `<button class="btn sm" data-act="go" data-v="usuarioForm" data-cpf="${dq}">Cadastrar este CPF</button>` : ''}</div></div>`;
   return `<div class="table-wrap cards"><table><thead><tr><th>Nome</th><th>CPF</th><th>Telefone</th><th>Situação</th><th>Com livros</th></tr></thead><tbody>
-    ${list.map(u => `<tr class="click" data-act="go" data-v="usuario" data-id="${u.id}"><td class="lead"><div class="t">${esc(u.nome)}</div><div class="s">${esc(u.email || 'sem e-mail')}</div></td>
-      <td data-label="CPF" class="mono small">${showCPF(u.cpf)}</td><td data-label="Telefone">${esc(u.telefone || '—')}</td>
+    ${list.map(u => `<tr class="click" data-act="go" data-v="usuario" data-id="${u.id}"><td class="lead"><div class="t">${esc(u.nome)}</div><div class="s">${u.assocId ? `${assocInfo(u)} · ` : ''}${esc(u.email || 'sem e-mail')}</div></td>
+      <td data-label="CPF" class="mono small">${u.cpf ? showCPF(u.cpf) : '—'}${u.cpfResp ? ' <span class="small muted">(responsável)</span>' : ''}</td><td data-label="Telefone">${esc(u.telefone || '—')}</td>
       <td data-label="Situação">${pill(u.status, US_CLS[u.status])}</td><td data-label="Com livros" class="num">${activeOf(u.id).length} de ${S.config.maxExemplares}</td></tr>`).join('')}
     </tbody></table></div>`;
 }
 VIEWS.usuarios = {
   render() {
     const c = s => s === 'Todos' ? S.usuarios.length : S.usuarios.filter(u => u.status === s).length;
-    return `<div class="page-head"><div><h1>Usuários autorizados</h1><p class="sub">Pessoas aptas a retirar livros. A busca por CPF é a forma principal de localizar um cadastro.</p></div>
+    return `<div class="page-head"><div><h1>Usuários autorizados</h1><p class="sub">Pessoas aptas a retirar livros. Todo associado já tem cadastro, que vem da Secretaria. Busque por CPF, nome, e-mail ou matrícula.</p></div>
       <button class="btn primary" data-act="go" data-v="usuarioForm">${ic('plus')} Novo usuário</button></div>
       <div class="toolbar"><label class="search"><span class="sr">Buscar</span>${ic('search')}<input id="us-q" data-in="usQ" value="${esc(P.q || '')}" placeholder="CPF, nome ou e-mail" autocomplete="off"></label>
       <div class="seg" role="group" aria-label="Situação">${['Todos', 'Ativo', 'Bloqueado', 'Inativo'].map(s => `<button data-act="usSt" data-st="${s}" aria-pressed="${(P.st || 'Todos') === s}">${s === 'Todos' ? 'Todos' : s + 's'}<span class="n">${c(s)}</span></button>`).join('')}</div></div>
@@ -632,12 +639,13 @@ VIEWS.usuario = {
     return `<div><button class="back" data-act="go" data-v="usuarios">${ic('back')} Usuários</button>
       <div class="page-head"><div><h1>${esc(u.nome)}</h1><p class="sub">${pill(u.status, US_CLS[u.status])} · ${activeOf(u.id).length} de ${S.config.maxExemplares} exemplares em uso</p></div>
       <div class="toolbar"><button class="btn" data-act="go" data-v="usuarioForm" data-id="${u.id}">${ic('edit')} Editar</button>
-        ${u.status === 'Ativo' ? `<button class="btn danger" data-act="usStatus" data-id="${u.id}" data-to="Bloqueado">Bloquear</button><button class="btn" data-act="usStatus" data-id="${u.id}" data-to="Inativo">Inativar</button>` : `<button class="btn" data-act="usStatus" data-id="${u.id}" data-to="Ativo">Reativar</button>`}
+        ${u.status === 'Ativo' ? `<button class="btn danger" data-act="usStatus" data-id="${u.id}" data-to="Bloqueado">Bloquear</button><button class="btn" data-act="usStatus" data-id="${u.id}" data-to="Inativo">Inativar</button>` : u.obs === MARCA_SECRETARIA ? '<span class="small muted">Reative na Secretaria</span>' : `<button class="btn" data-act="usStatus" data-id="${u.id}" data-to="Ativo">Reativar</button>`}
         <button class="btn primary" data-act="go" data-v="emprestar" data-cpf="${u.cpf}" ${bl.length ? 'disabled' : ''}>${ic('swap')} Novo empréstimo</button></div></div></div>
       ${bl.length ? `<div class="note warn"><b>Não pode retirar livros agora</b><ul>${bl.map(r => `<li>${esc(r)}</li>`).join('')}</ul></div>` : ''}
+      ${u.assocId ? `<div class="note info"><b>${assocInfo(u)}</b><span>Cadastro criado e atualizado pela Secretaria. Nome, CPF, e-mail, telefone e situação de associado são alterados lá.${u.sincEm ? ` Última atualização: ${fmtD(u.sincEm.slice(0, 10))}.` : ''}</span></div>` : ''}
       <section class="panel"><dl class="facts">
-        <div><dt>CPF</dt><dd class="mono">${showCPF(u.cpf)}</dd></div>
-        <div><dt>E-mail</dt><dd>${esc(u.email || '—')}</dd></div>
+        <div><dt>CPF${u.cpfResp ? ' (do responsável)' : ''}</dt><dd class="mono">${u.cpf ? showCPF(u.cpf) : '—'}</dd></div>
+        <div><dt>E-mail${u.emailResp ? ' (do responsável)' : ''}</dt><dd>${esc(u.email || '—')}${u.email ? '' : ' <span class="small muted">(não recebe lembretes)</span>'}</dd></div>
         <div><dt>Telefone</dt><dd>${esc(u.telefone || '—')}</dd></div>
         <div><dt>Autorizado em</dt><dd>${fmtD(u.dataAut)}</dd></div>
         <div><dt>Cadastro</dt><dd>${fmtD(u.dataCadastro)}</dd></div>
@@ -661,15 +669,15 @@ VIEWS.usuarioForm = {
     const u = P.id ? user(P.id) : null, ed = !!u;
     const v = (k, d = '') => esc(u ? (u[k] ?? d) : d);
     const cpf = u ? fmtCPF(u.cpf) : (P.cpf ? fmtCPF(P.cpf) : '');
-    const cpfLock = ed && !isAdmin();
+    const vinc = ed && !!u.assocId, cpfLock = ed && (!isAdmin() || vinc), ro = vinc ? 'readonly' : '';
     return `<div><button class="back" data-act="go" data-v="${ed ? 'usuario' : 'usuarios'}" ${ed ? `data-id="${u.id}"` : ''}>${ic('back')} ${ed ? 'Voltar para o cadastro' : 'Usuários'}</button>
       <div class="page-head"><div><h1>${ed ? 'Editar usuário' : 'Novo usuário autorizado'}</h1><p class="sub">${ed ? 'O histórico de empréstimos é mantido.' : 'Comece pelo CPF: o sistema verifica se a pessoa já tem cadastro.'}</p></div></div></div>
-      <form class="panel form" data-form="usuario" novalidate><div class="fields">
+      <form class="panel form" data-form="usuario" novalidate>${vinc ? `<div class="note info"><b>${assocInfo(u)}</b><span>Nome, CPF, e-mail e telefone vêm do cadastro da Secretaria e só podem ser alterados lá. Aqui dá para mudar a situação na biblioteca e as observações.</span></div>` : ''}<div class="fields">
         <div class="field full"><label for="f-cpf">CPF <span class="req">*</span></label><input id="f-cpf" class="mono" data-in="cpfForm" inputmode="numeric" value="${cpfLock ? maskCPF(u.cpf) : cpf}" placeholder="000.000.000-00" ${cpfLock ? 'readonly' : ''} style="max-width:260px">
-          ${cpfLock ? '<span class="hint">Somente o administrador pode corrigir o CPF.</span>' : ''}<div id="cpf-check">${cpfLock ? '' : cpfCheckHTML(cpf, u && u.id)}</div></div>
-        <div class="field full"><label for="f-nome">Nome completo <span class="req">*</span></label><input id="f-nome" value="${v('nome')}" autocomplete="off"><span class="msg" id="m-nome"></span></div>
-        <div class="field"><label for="f-email">E-mail <span class="req">*</span></label><input id="f-email" type="email" value="${v('email')}"><span class="hint">Obrigatório: é para onde vão os lembretes de devolução.</span><span class="msg" id="m-email"></span></div>
-        <div class="field"><label for="f-tel">Telefone</label><input id="f-tel" inputmode="tel" value="${v('telefone')}" placeholder="(11) 90000-0000"></div>
+          ${cpfLock && !vinc ? '<span class="hint">Somente o administrador pode corrigir o CPF.</span>' : ''}<div id="cpf-check">${cpfLock ? '' : cpfCheckHTML(cpf, u && u.id)}</div></div>
+        <div class="field full"><label for="f-nome">Nome completo <span class="req">*</span></label><input id="f-nome" value="${v('nome')}" autocomplete="off" ${ro}><span class="msg" id="m-nome"></span></div>
+        <div class="field"><label for="f-email">E-mail <span class="req">*</span></label><input id="f-email" type="email" value="${v('email')}" ${ro}><span class="hint">Obrigatório: é para onde vão os lembretes de devolução.</span><span class="msg" id="m-email"></span></div>
+        <div class="field"><label for="f-tel">Telefone</label><input id="f-tel" inputmode="tel" value="${v('telefone')}" placeholder="(11) 90000-0000" ${ro}></div>
         <div class="field"><label for="f-aut">Data de autorização <span class="req">*</span></label><input id="f-aut" type="date" value="${v('dataAut', TODAY())}"></div>
         <div class="field"><label for="f-status">Situação</label><select id="f-status">${['Ativo', 'Bloqueado', 'Inativo'].map(s => `<option ${(u ? u.status : 'Ativo') === s ? 'selected' : ''}>${s}</option>`).join('')}</select></div>
         <div class="field full"><label for="f-uobs">Observações</label><textarea id="f-uobs">${v('obs')}</textarea></div>
@@ -682,9 +690,14 @@ VIEWS.usuarioForm = {
 /* ---- Empréstimo ---- */
 function findLoanUser() {
   const d = UI.draft; d.userChecked = true; d.err = ''; d.termo = false;
-  const c = digits(d.cpf);
-  if (c.length !== 11 || !cpfValido(c)) { d.userId = null; d.userMsg = c.length === 11 ? 'CPF inválido. Confira os dígitos.' : 'Digite os 11 dígitos do CPF.'; return; }
-  const u = userByCPF(c); d.userId = u ? u.id : null; d.userMsg = u ? '' : 'CPF não encontrado. A pessoa precisa ser cadastrada como usuário autorizado.';
+  const c = digits(d.cpf); d.choices = null;
+  if (c.length >= 1 && c.length <= 6) { // matrícula do associado
+    const u = S.usuarios.find(x => x.assocId && x.matricula === +c); d.userId = u ? u.id : null; d.userMsg = u ? '' : `Nenhum associado com a matrícula ${fmtMat(c)}.`; return;
+  }
+  if (c.length !== 11 || !cpfValido(c)) { d.userId = null; d.userMsg = c.length === 11 ? 'CPF inválido. Confira os dígitos.' : 'Digite os 11 dígitos do CPF ou a matrícula do associado.'; return; }
+  const us = usersByCPF(c);
+  if (us.length > 1) { d.userId = null; d.choices = us.map(x => x.id); d.userMsg = ''; return; } // responsável e dependentes com o mesmo CPF
+  const u = us[0]; d.userId = u ? u.id : null; d.userMsg = u ? '' : 'CPF não encontrado. A pessoa precisa ser cadastrada como usuário autorizado.';
 }
 function findLoanEx() {
   const d = UI.draft; d.exChecked = true; d.err = ''; d.termo = false;
@@ -707,7 +720,8 @@ function loanState() {
 VIEWS.emprestar = {
   render() {
     const d = UI.draft, s = loanState(), cfg = S.config;
-    const uRes = !d.userChecked ? '<p class="small muted">Digite o CPF e toque em Buscar.</p>'
+    const uRes = !d.userChecked ? '<p class="small muted">Digite o CPF (ou a matrícula do associado) e toque em Buscar.</p>'
+      : !s.u && d.choices ? `<div class="note info"><b>Este CPF está em mais de um cadastro</b><span>Responsável e dependentes usam o mesmo CPF. Escolha quem vai retirar:</span><span class="btns">${d.choices.map(id => user(id)).filter(Boolean).map(x => `<button class="btn sm" data-act="loanPick" data-id="${x.id}">${esc(x.nome)}${x.assocId ? ` · ${fmtMat(x.matricula)}` : ''}</button>`).join('')}</span></div>`
       : !s.u ? `<div class="note bad"><b>${esc(d.userMsg)}</b>${digits(d.cpf).length === 11 && cpfValido(d.cpf) ? `<span><button class="btn sm" data-act="go" data-v="usuarioForm" data-cpf="${digits(d.cpf)}">Cadastrar este CPF</button></span>` : ''}</div>`
       : `<div class="result"><span class="big">${esc(s.u.nome)}</span><span>${pill(s.u.status, US_CLS[s.u.status])} <span class="small muted">· ${activeOf(s.u.id).length} de ${cfg.maxExemplares} exemplares em uso</span></span>
          ${s.ub.length ? `<div class="note bad"><b>Empréstimo bloqueado</b><ul>${s.ub.map(r => `<li>${esc(r)}</li>`).join('')}</ul></div>` : '<div class="note ok"><b>Pode retirar livros</b></div>'}</div>`;
@@ -720,7 +734,7 @@ VIEWS.emprestar = {
     return `<div class="page-head"><div><h1>Novo empréstimo</h1><p class="sub">Vincule um usuário autorizado a um exemplar disponível.</p></div></div>
     <div class="steps">
       <section class="panel"><h2 class="step-title"><span class="step-n ${done1 ? 'done' : ''}">${done1 ? '✓' : '1'}</span>Usuário</h2>
-        <form data-form="loanUser" class="field"><label for="l-cpf">CPF do usuário</label><div class="inline"><input id="l-cpf" class="mono" data-in="loanCpf" inputmode="numeric" value="${esc(d.cpf)}" placeholder="000.000.000-00" autocomplete="off"><button class="btn" aria-label="Buscar usuário">${ic('search')}</button></div></form>
+        <form data-form="loanUser" class="field"><label for="l-cpf">CPF ou matrícula do associado</label><div class="inline"><input id="l-cpf" class="mono" data-in="loanCpf" inputmode="numeric" value="${esc(d.cpf)}" placeholder="000.000.000-00" autocomplete="off"><button class="btn" aria-label="Buscar usuário">${ic('search')}</button></div></form>
         ${uRes}</section>
       <section class="panel"><h2 class="step-title"><span class="step-n ${done2 ? 'done' : ''}">${done2 ? '✓' : '2'}</span>Exemplar</h2>
         <form data-form="loanEx" class="field"><label for="l-hash">Código da etiqueta</label><div class="inline"><input id="l-hash" class="mono" data-in="loanHash" value="${esc(d.cod)}" placeholder="Ex.: 42 ou LIV-0042-ESP" autocomplete="off" autocapitalize="characters"><button class="btn" aria-label="Buscar exemplar">${ic('search')}</button></div></form>
@@ -978,7 +992,11 @@ VIEWS.configuracoes = {
   render() {
     const c = S.config;
     const num = (id, label, val, hint, min, max) => `<div class="field"><label for="${id}">${label}</label><input id="${id}" type="number" min="${min}" max="${max}" value="${val}"><span class="hint">${hint}</span></div>`;
+    const assocs = S.usuarios.filter(u => u.assocId);
     return `<div class="page-head"><div><h1>Configurações</h1><p class="sub">Regras usadas no empréstimo e na rotina de alertas. Só administradores alteram.</p></div></div>
+      <section class="panel"><div class="panel-head"><h2>Associados (Secretaria)</h2><button class="btn sm" data-act="usSincronizar">${ic('refresh')} Sincronizar agora</button></div>
+        <p class="small muted">Todo associado tem cadastro de usuário, criado e atualizado a partir da Secretaria sempre que o sistema abre, a cada empréstimo e uma vez por dia. Desligados e falecidos ficam inativos; mensalidades acima da tolerância impedem novos empréstimos e renovações.</p>
+        <p class="small"><b>${plural(assocs.length, 'associado', 'associados')}</b> · ${plural(assocs.filter(u => u.bloqueioAssoc).length, 'com mensalidades em atraso', 'com mensalidades em atraso')} · ${plural(assocs.filter(u => !u.email).length, 'sem e-mail', 'sem e-mail')}</p></section>
       <form class="panel form" data-form="config" novalidate>
         <fieldset><legend>Empréstimo</legend><div class="fields">
           ${num('c-prazo', 'Prazo padrão (dias)', c.prazo, 'Sugere a data de devolução.', 1, 120)}
@@ -1338,6 +1356,10 @@ const ACT = {
 
   /* Usuários */
   usSt(t) { P.st = t.dataset.st; render(); },
+  loanPick(t) { const d = UI.draft; d.userId = t.dataset.id; d.choices = null; d.userMsg = ''; render(); },
+  usSincronizar() {
+    run(async () => { const r = await api('usuarios.sincronizar', {}, { msg: 'Buscando o cadastro da Secretaria…' }); await boot(true); toast(`Secretaria: ${plural(r.novos, 'novo cadastro', 'novos cadastros')}, ${plural(r.atualizados, 'atualizado', 'atualizados')}`); });
+  },
   usStatus(t) {
     const u = user(t.dataset.id), to = t.dataset.to;
     openModal(`<h2>${to === 'Bloqueado' ? 'Bloquear usuário' : to === 'Inativo' ? 'Inativar usuário' : 'Reativar usuário'}</h2><p><b>${esc(u.nome)}</b></p>
@@ -1619,14 +1641,14 @@ const FORM = {
   },
   usuario() {
     const ed = !!P.id, u = ed ? user(P.id) : null, val = id => ($('#f-' + id)?.value || '').trim();
-    const cpfLock = ed && !isAdmin(); const cpf = cpfLock ? u.cpf : digits(val('cpf'));
+    const vinc = ed && !!u.assocId, cpfLock = ed && (!isAdmin() || vinc); const cpf = cpfLock ? u.cpf : digits(val('cpf'));
     let ok = true;
     if (!cpfLock) {
       const ex = userByCPF(cpf);
       if (!cpfValido(cpf) || (ex && ex.id !== (u && u.id))) { $('#cpf-check').innerHTML = cpfCheckHTML(val('cpf'), u && u.id) || '<div class="note bad"><b>Informe um CPF válido.</b></div>'; $('#f-cpf').focus(); ok = false; }
     }
     ok = fieldErr('nome', val('nome').length < 3 ? 'Informe o nome completo.' : '') && ok;
-    ok = fieldErr('email', !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(val('email')) ? 'Informe um e-mail válido.' : '') && ok;
+    if (!vinc) ok = fieldErr('email', !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(val('email')) ? 'Informe um e-mail válido.' : '') && ok;
     if (!ok) return;
     const data = { id: ed ? u.id : '', nome: val('nome'), cpf, email: val('email').toLowerCase(), telefone: val('tel'), dataAut: val('aut') || TODAY(), status: $('#f-status').value, obs: val('uobs') };
     run(async () => {
